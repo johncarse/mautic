@@ -35,6 +35,17 @@ final class PRedisConnectionHelper
             return [$configuredUrls];
         }
 
+        // Convert parse_url() keys to Predis-expected keys.
+        // PHP's parse_url() returns 'user'/'pass' but Predis expects 'username'/'password'.
+        if (isset($parsed['user'])) {
+            $parsed['username'] = $parsed['user'];
+            unset($parsed['user']);
+        }
+        if (isset($parsed['pass'])) {
+            $parsed['password'] = $parsed['pass'];
+            unset($parsed['pass']);
+        }
+
         // resolve hostnames ahead of time to support dns records with multiple ip addresses
         // we need to provide each one to predis separately or it will just use a single one
         $resolvedArray = gethostbynamel($parsed['host']);
@@ -106,7 +117,7 @@ final class PRedisConnectionHelper
         // Convert single-endpoint array to string to avoid Predis 3 aggregate connection error
         // This is to maintain compatibility with Predis 3 which expects a string for single endpoint
         // or an array of endpoints for multiple connections.
-        if (1 === count($endpoints)) {
+        if (1 === count($endpoints) && is_string(reset($endpoints))) {
             $endpoints = reset($endpoints);
         }
 

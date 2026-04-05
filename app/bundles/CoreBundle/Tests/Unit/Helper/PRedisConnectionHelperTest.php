@@ -40,6 +40,20 @@ final class PRedisConnectionHelperTest extends TestCase
         }
     }
 
+    public function testEndpointsWithAuthConvertedToPredisKeys(): void
+    {
+        // parse_url() returns 'user'/'pass' but Predis expects 'username'/'password'
+        $connInfo = PRedisConnectionHelper::getRedisEndpoints('redis://myuser:mypass@1.1.1.1:6379');
+        Assert::assertIsArray($connInfo);
+        Assert::assertCount(1, $connInfo);
+
+        $endpoint = $connInfo[0];
+        Assert::assertSame('myuser', $endpoint['username']);
+        Assert::assertSame('mypass', $endpoint['password']);
+        Assert::assertArrayNotHasKey('user', $endpoint);
+        Assert::assertArrayNotHasKey('pass', $endpoint);
+    }
+
     public function testRedisOptions(): void
     {
         $redisConfiguration = [
