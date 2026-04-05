@@ -17,6 +17,8 @@ use Mautic\FormBundle\Entity\Form;
 use Mautic\FormBundle\Model\ActionModel;
 use Mautic\FormBundle\Model\FieldModel;
 use Mautic\FormBundle\Model\FormModel;
+use Mautic\LeadBundle\Entity\Tag;
+use Mautic\LeadBundle\Entity\TagRepository;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 use Symfony\Component\Form\FormFactoryInterface;
 use Symfony\Component\Form\FormInterface;
@@ -255,6 +257,31 @@ class FormApiController extends CommonApiController
                 }
 
                 $actionEntity->setForm($entity);
+
+                // Resolve string tag names to IDs for lead.changetags actions (API may send names, but EntityType expects IDs)
+                if ('lead.changetags' === ($actionParams['type'] ?? '')) {
+                    /** @var TagRepository $tagRepo */
+                    $tagRepo = $this->doctrine->getRepository(Tag::class);
+                    $em      = $this->doctrine->getManager();
+                    foreach (['add_tags', 'remove_tags'] as $tagField) {
+                        if (!empty($actionParams['properties'][$tagField]) && is_array($actionParams['properties'][$tagField])) {
+                            $resolved = [];
+                            foreach ($actionParams['properties'][$tagField] as $tagValue) {
+                                if (is_numeric($tagValue)) {
+                                    $resolved[] = (int) $tagValue;
+                                } else {
+                                    $tag = $tagRepo->getTagByNameOrCreateNewOne($tagValue);
+                                    if (!$tag->getId()) {
+                                        $em->persist($tag);
+                                        $em->flush();
+                                    }
+                                    $resolved[] = $tag->getId();
+                                }
+                            }
+                            $actionParams['properties'][$tagField] = $resolved;
+                        }
+                    }
+                }
 
                 $actionForm = $this->createActionEntityForm($actionEntity, $actionParams);
                 $actionForm->submit($actionParams, 'PATCH' !== $method);

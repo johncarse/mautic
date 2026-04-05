@@ -90,6 +90,17 @@ class PRedisConnectionHelperTest extends TestCase
         }
     }
 
+    public function testCreateClientWithSingleParsedEndpoint(): void
+    {
+        // When getRedisEndpoints() resolves a hostname to a single IP, it returns
+        // a parsed URL array, not a string. Predis 3 needs this unwrapped to avoid
+        // creating an aggregate connection that errors on single endpoints.
+        $endpoint = [['host' => '127.0.0.1', 'port' => 6379, 'scheme' => 'tcp']];
+        $client   = PRedisConnectionHelper::createClient($endpoint, []);
+
+        Assert::assertNull($client->getOptions()->aggregate);
+    }
+
     public function testCreateClientWithSentinel(): void
     {
         $prefix  = 'somePrefix';

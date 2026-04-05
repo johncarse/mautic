@@ -73,4 +73,26 @@ class ContactFinderTest extends \PHPUnit\Framework\TestCase
         $this->assertEquals($result->getStat(), $stat);
         $this->assertEquals($result->getContacts(), [$lead]);
     }
+
+    #[\PHPUnit\Framework\Attributes\TestDox('Warning should be logged when hash is not found in stats')]
+    public function testWarningLoggedWhenHashNotFound(): void
+    {
+        $statRepository = $this->createMock(StatRepository::class);
+        $statRepository->expects($this->once())
+            ->method('findOneBy')
+            ->willReturn(null);
+
+        $leadRepository = $this->createMock(LeadRepository::class);
+
+        $logger = $this->createMock(Logger::class);
+        $logger->expects($this->once())
+            ->method('warning')
+            ->with($this->stringContains('No stat found for hash'));
+
+        $finder = new ContactFinder($statRepository, $leadRepository, $logger);
+        $result = $finder->findByHash('nonexistent_hash');
+
+        $this->assertNull($result->getStat());
+        $this->assertEmpty($result->getContacts());
+    }
 }
