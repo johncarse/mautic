@@ -15,6 +15,8 @@ use Mautic\CoreBundle\Security\Permissions\CorePermissions;
 use Mautic\CoreBundle\Twig\Helper\AnalyticsHelper;
 use Mautic\CoreBundle\Twig\Helper\AssetsHelper;
 use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Entity\LeadDevice;
+use Mautic\LeadBundle\Entity\LeadDeviceRepository;
 use Mautic\LeadBundle\Helper\ContactRequestHelper;
 use Mautic\LeadBundle\Model\LeadModel;
 use Mautic\LeadBundle\Tracker\ContactTracker;
@@ -527,6 +529,23 @@ final class PublicController extends AbstractFormController
                     $url .= '?ct='.$ct;
                 }
             }
+        }
+
+        // Cross-domain tracking: append device tracking ID to redirect URL so that
+        // mtc.js on the landing page can identify this contact via the URL parameter.
+        // Without this, the mautic_device_id cookie (set on the Mautic domain) is
+        // invisible to JS on the destination domain.
+        $trackedDevice = null;
+        if (isset($lead)) {
+            /** @var LeadDeviceRepository $leadDeviceRepository */
+            $leadDeviceRepository = $this->doctrine->getRepository(LeadDevice::class);
+            $trackedDevice        = $leadDeviceRepository->findOneBy(
+                ['lead' => $lead],
+                ['dateAdded' => 'DESC']
+            );
+        }
+        if ($trackedDevice) {
+            $url = UrlHelper::appendQueryToUrl($url, 'mautic_device_id='.$trackedDevice->getTrackingId());
         }
 
         $url = UrlHelper::sanitizeAbsoluteUrl($url);

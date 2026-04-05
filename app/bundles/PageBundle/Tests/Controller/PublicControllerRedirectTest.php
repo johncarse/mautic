@@ -8,6 +8,7 @@ use Mautic\CoreBundle\Helper\ClickthroughHelper;
 use Mautic\CoreBundle\Test\MauticMysqlTestCase;
 use Mautic\EmailBundle\Entity\Stat;
 use Mautic\LeadBundle\Entity\Lead;
+use Mautic\LeadBundle\Entity\LeadDevice;
 use Mautic\PageBundle\Entity\Hit;
 use Mautic\PageBundle\Entity\Page;
 use Mautic\PageBundle\Entity\Redirect;
@@ -127,6 +128,51 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
 
         $hit = $this->em->getRepository(Hit::class)->findOneBy(['url' => $url]);
         $this->assertInstanceOf(Hit::class, $hit);
+    }
+
+    public function testRedirectAppendsDeviceId(): void
+    {
+        $url          = 'https://example.com/landing';
+        $emailAddress = 'devicetest@example.com';
+        $trackingId   = 'test-device-tracking-id-123';
+
+        $lead = new Lead();
+        $lead->setEmail($emailAddress);
+        $this->em->persist($lead);
+
+        $stat = new Stat();
+        $stat->setTrackingHash('abc123def456');
+        $stat->setDateSent(new \DateTime());
+        $stat->setEmailAddress($emailAddress);
+        $this->em->persist($stat);
+
+        $redirect = new Redirect();
+        $redirect->setUrl($url);
+        $redirect->setRedirectId('devicetest123redirect');
+        $this->em->persist($redirect);
+
+        $device = new LeadDevice();
+        $device->setLead($lead);
+        $device->setTrackingId($trackingId);
+        $device->setDevice('desktop');
+        $device->setDeviceBrand('unknown');
+        $device->setDeviceModel('unknown');
+        $device->setDateAdded(new \DateTime());
+        $this->em->persist($device);
+
+        $this->em->flush();
+
+        $ct = $this->getEncodedClickThroughValue($stat->getTrackingHash(), (int) $lead->getId());
+
+        $this->logoutUser();
+
+        $this->client->followRedirects(false);
+        $this->client->request(Request::METHOD_GET, sprintf('/r/%s?ct=%s', $redirect->getRedirectId(), $ct));
+
+        $response = $this->client->getResponse();
+        \assert($response instanceof RedirectResponse);
+        Assert::assertSame(Response::HTTP_FOUND, $response->getStatusCode());
+        Assert::assertStringContainsString('mautic_device_id='.$trackingId, $response->getTargetUrl());
     }
 
     private function getEncodedClickThroughValue(string $trackingHash, int $leadId): string

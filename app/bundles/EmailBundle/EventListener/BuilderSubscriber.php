@@ -49,6 +49,8 @@ final class BuilderSubscriber implements EventSubscriberInterface
             EmailEvents::EMAIL_ON_SEND  => [
                 ['fixEmailAccessibility', 10000],
                 ['onEmailGenerate', 0],
+                // Inject honeypot link before URL conversion so it becomes a tracked redirect
+                ['injectHoneypotLink', -1],
                 // Ensure this is done last in order to catch all tokenized URLs
                 ['convertUrlsToTokens', -9999],
             ],
@@ -221,6 +223,33 @@ final class BuilderSubscriber implements EventSubscriberInterface
 
         $event->addToken('{subject}', EmojiHelper::toHtml($event->getSubject()));
         $event->addToken('{brand=name}', (string) $this->coreParametersHelper->get('brand_name'));
+    }
+
+    /**
+     * Inject a hidden honeypot link into outgoing emails for bot detection.
+     * Email security scanners click every link; real users never see this one.
+     * Any contact that triggers a page_hit on the honeypot URL is a confirmed bot.
+     * Injected before convertUrlsToTokens so the URL becomes a tracked redirect.
+     */
+    public function injectHoneypotLink(EmailSendEvent $event): void
+    {
+        if ($event->isInternalSend()) {
+            return;
+        }
+
+        $honeypotUrl = $this->coreParametersHelper->get('honeypot_url');
+        if (empty($honeypotUrl)) {
+            return;
+        }
+
+        $content = $event->getContent();
+        if (str_contains($content, '</body>')) {
+            $honeypotHtml = '<a href="'.$honeypotUrl.'" style="position:absolute;left:-9999px;top:-9999px;'
+                .'font-size:0;line-height:0;color:transparent;text-decoration:none;'
+                .'overflow:hidden;height:1px;width:1px;" tabindex="-1" aria-hidden="true">.</a>';
+            $content = str_replace('</body>', $honeypotHtml.'</body>', $content);
+            $event->setContent($content);
+        }
     }
 
     public function convertUrlsToTokens(EmailSendEvent $event): void

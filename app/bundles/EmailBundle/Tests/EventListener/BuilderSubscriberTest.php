@@ -298,5 +298,55 @@ final class BuilderSubscriberTest extends TestCase
             '<a href="/email/unsubscribe/hash/lukas.sykora@acquia.com/'.$emailHash.'">Unsubscribe</a> '.$company->getName().' '.$lead->getLastname(),
             $event->getTokens()['{unsubscribe_text}']
         );
+    public function testHoneypotLinkInjected(): void
+    {
+        $this->coreParametersHelper->method('get')->willReturnCallback(function ($key) {
+            if ('honeypot_url' === $key) {
+                return 'https://example.com/honeypot';
+            }
+
+            return null;
+        });
+
+        $event = new EmailSendEvent(null, ['email' => new Email()]);
+        $event->setContent('<html><body><p>Hello</p></body></html>');
+
+        $this->builderSubscriber->injectHoneypotLink($event);
+
+        $this->assertStringContainsString('https://example.com/honeypot', $event->getContent());
+        $this->assertStringContainsString('aria-hidden="true"', $event->getContent());
+        $this->assertStringContainsString('</body>', $event->getContent());
+    }
+
+    public function testHoneypotLinkNotInjectedWhenDisabled(): void
+    {
+        $this->coreParametersHelper->method('get')->willReturn(null);
+
+        $content = '<html><body><p>Hello</p></body></html>';
+        $event   = new EmailSendEvent(null, ['email' => new Email()]);
+        $event->setContent($content);
+
+        $this->builderSubscriber->injectHoneypotLink($event);
+
+        $this->assertSame($content, $event->getContent());
+    }
+
+    public function testHoneypotLinkNotInjectedForInternalSend(): void
+    {
+        $this->coreParametersHelper->method('get')->willReturnCallback(function ($key) {
+            if ('honeypot_url' === $key) {
+                return 'https://example.com/honeypot';
+            }
+
+            return null;
+        });
+
+        $content = '<html><body><p>Hello</p></body></html>';
+        $event   = new EmailSendEvent(null, ['email' => new Email(), 'internalSend' => true]);
+        $event->setContent($content);
+
+        $this->builderSubscriber->injectHoneypotLink($event);
+
+        $this->assertStringNotContainsString('honeypot', $event->getContent());
     }
 }
