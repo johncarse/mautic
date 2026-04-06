@@ -584,10 +584,12 @@ final class CampaignApiControllerFunctionalTest extends MauticMysqlTestCase
         Assert::assertGreaterThan(0, $eventCount);
 
         // PATCH with only name — events should be preserved
-        $this->client->request(Request::METHOD_PATCH, "api/campaigns/{$campaignId}/edit", [
+        $this->client->request(Request::METHOD_PATCH, "/api/campaigns/{$campaignId}/edit", [
             'name' => 'Renamed Campaign',
         ]);
-        $patchResponse = json_decode($this->client->getResponse()->getContent(), true);
+        $patchContent  = $this->client->getResponse()->getContent();
+        $patchResponse = json_decode($patchContent, true);
+        $this->assertResponseStatusCodeSame(200, $patchContent);
         Assert::assertSame('Renamed Campaign', $patchResponse['campaign']['name']);
         Assert::assertCount($eventCount, $patchResponse['campaign']['events'], 'Events should be preserved after PATCH without events field');
     }
@@ -617,7 +619,7 @@ final class CampaignApiControllerFunctionalTest extends MauticMysqlTestCase
         Assert::assertNotNull($emailEvent);
 
         // PATCH: update triggerInterval on the email event
-        $this->client->request(Request::METHOD_PATCH, "api/campaigns/{$campaignId}/edit", [
+        $this->client->request(Request::METHOD_PATCH, "/api/campaigns/{$campaignId}/edit", [
             'events' => [
                 [
                     'id'              => $emailEvent['id'],
@@ -625,7 +627,9 @@ final class CampaignApiControllerFunctionalTest extends MauticMysqlTestCase
                 ],
             ],
         ]);
-        $patchResponse = json_decode($this->client->getResponse()->getContent(), true);
+        $patchContent  = $this->client->getResponse()->getContent();
+        $patchResponse = json_decode($patchContent, true);
+        $this->assertResponseStatusCodeSame(200, $patchContent);
         Assert::assertCount($eventCount, $patchResponse['campaign']['events'], 'All events should be preserved during merge');
 
         // Find the updated event and check interval
@@ -653,12 +657,12 @@ final class CampaignApiControllerFunctionalTest extends MauticMysqlTestCase
         $lastEventId = end($events)['id'];
 
         // DELETE the last event
-        $this->client->request(Request::METHOD_DELETE, "api/campaigns/{$campaignId}/events/{$lastEventId}/delete");
+        $this->client->request(Request::METHOD_DELETE, "/api/campaigns/{$campaignId}/events/{$lastEventId}/delete");
         $deleteResponse = json_decode($this->client->getResponse()->getContent(), true);
         Assert::assertSame(1, $deleteResponse['success']);
 
         // Verify event count decreased
-        $this->client->request(Request::METHOD_GET, "api/campaigns/{$campaignId}");
+        $this->client->request(Request::METHOD_GET, "/api/campaigns/{$campaignId}");
         $getResponse = json_decode($this->client->getResponse()->getContent(), true);
         Assert::assertCount($eventCount - 1, $getResponse['campaign']['events']);
     }
@@ -676,7 +680,7 @@ final class CampaignApiControllerFunctionalTest extends MauticMysqlTestCase
         $campaignId = $response['campaign']['id'];
 
         // Try to delete a non-existent event
-        $this->client->request(Request::METHOD_DELETE, "api/campaigns/{$campaignId}/events/99999/delete");
+        $this->client->request(Request::METHOD_DELETE, "/api/campaigns/{$campaignId}/events/99999/delete");
         Assert::assertSame(Response::HTTP_NOT_FOUND, $this->client->getResponse()->getStatusCode());
     }
 
