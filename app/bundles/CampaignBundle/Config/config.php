@@ -138,6 +138,11 @@ return [
                 'controller' => 'Mautic\CampaignBundle\Controller\Api\CampaignApiController::importCampaignAction',
                 'method'     => 'POST',
             ],
+            'mautic_api_campaign_event_delete' => [
+                'path'       => '/campaigns/{campaignId}/events/{eventId}/delete',
+                'controller' => 'Mautic\CampaignBundle\Controller\Api\CampaignApiController::deleteEventAction',
+                'method'     => 'DELETE',
+            ],
         ],
     ],
 
