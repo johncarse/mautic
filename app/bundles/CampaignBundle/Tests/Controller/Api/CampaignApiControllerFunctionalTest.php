@@ -641,6 +641,73 @@ final class CampaignApiControllerFunctionalTest extends MauticMysqlTestCase
         }
     }
 
+    public function testPatchAddsNewEventToExistingCampaign(): void
+    {
+        $entities = $this->createTestEntities();
+        $segment  = $entities['segment'];
+        $email    = $entities['email'];
+
+        // Create a campaign with 2 events
+        $payload = $this->buildSimpleCampaignPayload($segment->getId(), $email->getId());
+        $this->client->request(Request::METHOD_POST, 'api/campaigns/new', $payload);
+        $response   = json_decode($this->client->getResponse()->getContent(), true);
+        $campaignId = $response['campaign']['id'];
+        $events     = $response['campaign']['events'];
+        Assert::assertCount(2, $events);
+
+        // Get the last event's real ID to use as parent for the new event
+        $lastEvent   = end($events);
+        $lastEventId = $lastEvent['id'];
+
+        // PATCH: add a 3rd event chained after the last one
+        $this->client->request(Request::METHOD_PATCH, "/api/campaigns/{$campaignId}/edit", [
+            'events' => [
+                [
+                    'id'                  => 'new_3',
+                    'name'                => 'Third email',
+                    'type'                => 'email.send',
+                    'eventType'           => 'action',
+                    'order'               => 3,
+                    'properties'          => ['email' => $email->getId(), 'email_type' => 'marketing'],
+                    'triggerInterval'     => 7,
+                    'triggerIntervalUnit' => 'd',
+                    'triggerMode'         => 'interval',
+                    'parent'              => $lastEventId,
+                    'decisionPath'        => null,
+                ],
+            ],
+            'canvasSettings' => [
+                'nodes' => [
+                    ['id' => 'lists', 'positionX' => '780', 'positionY' => '50'],
+                    ['id' => (string) $events[0]['id'], 'positionX' => '556', 'positionY' => '155'],
+                    ['id' => (string) $lastEventId, 'positionX' => '556', 'positionY' => '260'],
+                    ['id' => 'new_3', 'positionX' => '556', 'positionY' => '365'],
+                ],
+                'connections' => [
+                    ['sourceId' => 'lists', 'targetId' => (string) $events[0]['id'], 'anchors' => ['source' => 'leadsource', 'target' => 'top']],
+                    ['sourceId' => (string) $events[0]['id'], 'targetId' => (string) $lastEventId, 'anchors' => ['source' => 'bottom', 'target' => 'top']],
+                    ['sourceId' => (string) $lastEventId, 'targetId' => 'new_3', 'anchors' => ['source' => 'bottom', 'target' => 'top']],
+                ],
+            ],
+        ]);
+        $patchContent  = $this->client->getResponse()->getContent();
+        $patchResponse = json_decode($patchContent, true);
+        $this->assertResponseStatusCodeSame(200, $patchContent);
+        Assert::assertCount(3, $patchResponse['campaign']['events'], 'Campaign should now have 3 events');
+
+        // Verify the new event exists with correct properties
+        $newEvent = null;
+        foreach ($patchResponse['campaign']['events'] as $event) {
+            if ('Third email' === $event['name']) {
+                $newEvent = $event;
+                break;
+            }
+        }
+        Assert::assertNotNull($newEvent, 'New event should exist in the campaign');
+        Assert::assertSame(7, $newEvent['triggerInterval']);
+        Assert::assertSame('d', $newEvent['triggerIntervalUnit']);
+    }
+
     public function testDeleteSingleEvent(): void
     {
         $entities = $this->createTestEntities();
