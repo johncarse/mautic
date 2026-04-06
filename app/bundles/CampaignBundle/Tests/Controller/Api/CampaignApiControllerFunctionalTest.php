@@ -569,6 +569,168 @@ final class CampaignApiControllerFunctionalTest extends MauticMysqlTestCase
         unlink($filePath);
     }
 
+    public function testPatchWithoutEventsPreservesExistingEvents(): void
+    {
+        $entities = $this->createTestEntities();
+        $segment  = $entities['segment'];
+        $email    = $entities['email'];
+
+        // Create a campaign with events via POST
+        $payload = $this->buildSimpleCampaignPayload($segment->getId(), $email->getId());
+        $this->client->request(Request::METHOD_POST, 'api/campaigns/new', $payload);
+        $response   = json_decode($this->client->getResponse()->getContent(), true);
+        $campaignId = $response['campaign']['id'];
+        $eventCount = count($response['campaign']['events']);
+        Assert::assertGreaterThan(0, $eventCount);
+
+        // PATCH with only name — events should be preserved
+        $this->client->request(Request::METHOD_PATCH, "api/campaigns/{$campaignId}/edit", [
+            'name' => 'Renamed Campaign',
+        ]);
+        $patchResponse = json_decode($this->client->getResponse()->getContent(), true);
+        Assert::assertSame('Renamed Campaign', $patchResponse['campaign']['name']);
+        Assert::assertCount($eventCount, $patchResponse['campaign']['events'], 'Events should be preserved after PATCH without events field');
+    }
+
+    public function testPatchMergesEventsAndUpdatesProperties(): void
+    {
+        $entities = $this->createTestEntities();
+        $segment  = $entities['segment'];
+        $email    = $entities['email'];
+
+        // Create a campaign with events
+        $payload = $this->buildSimpleCampaignPayload($segment->getId(), $email->getId());
+        $this->client->request(Request::METHOD_POST, 'api/campaigns/new', $payload);
+        $response   = json_decode($this->client->getResponse()->getContent(), true);
+        $campaignId = $response['campaign']['id'];
+        $events     = $response['campaign']['events'];
+        $eventCount = count($events);
+
+        // Find the email.send event
+        $emailEvent = null;
+        foreach ($events as $event) {
+            if ('email.send' === $event['type']) {
+                $emailEvent = $event;
+                break;
+            }
+        }
+        Assert::assertNotNull($emailEvent);
+
+        // PATCH: update triggerInterval on the email event
+        $this->client->request(Request::METHOD_PATCH, "api/campaigns/{$campaignId}/edit", [
+            'events' => [
+                [
+                    'id'              => $emailEvent['id'],
+                    'triggerInterval' => 5,
+                ],
+            ],
+        ]);
+        $patchResponse = json_decode($this->client->getResponse()->getContent(), true);
+        Assert::assertCount($eventCount, $patchResponse['campaign']['events'], 'All events should be preserved during merge');
+
+        // Find the updated event and check interval
+        foreach ($patchResponse['campaign']['events'] as $event) {
+            if ($event['id'] === $emailEvent['id']) {
+                Assert::assertSame(5, $event['triggerInterval'], 'triggerInterval should be updated');
+                break;
+            }
+        }
+    }
+
+    public function testDeleteSingleEvent(): void
+    {
+        $entities = $this->createTestEntities();
+        $segment  = $entities['segment'];
+        $email    = $entities['email'];
+
+        // Create a campaign with events
+        $payload = $this->buildSimpleCampaignPayload($segment->getId(), $email->getId());
+        $this->client->request(Request::METHOD_POST, 'api/campaigns/new', $payload);
+        $response    = json_decode($this->client->getResponse()->getContent(), true);
+        $campaignId  = $response['campaign']['id'];
+        $events      = $response['campaign']['events'];
+        $eventCount  = count($events);
+        $lastEventId = end($events)['id'];
+
+        // DELETE the last event
+        $this->client->request(Request::METHOD_DELETE, "api/campaigns/{$campaignId}/events/{$lastEventId}/delete");
+        $deleteResponse = json_decode($this->client->getResponse()->getContent(), true);
+        Assert::assertSame(1, $deleteResponse['success']);
+
+        // Verify event count decreased
+        $this->client->request(Request::METHOD_GET, "api/campaigns/{$campaignId}");
+        $getResponse = json_decode($this->client->getResponse()->getContent(), true);
+        Assert::assertCount($eventCount - 1, $getResponse['campaign']['events']);
+    }
+
+    public function testDeleteNonExistentEventReturns404(): void
+    {
+        $entities = $this->createTestEntities();
+        $segment  = $entities['segment'];
+        $email    = $entities['email'];
+
+        // Create a campaign
+        $payload = $this->buildSimpleCampaignPayload($segment->getId(), $email->getId());
+        $this->client->request(Request::METHOD_POST, 'api/campaigns/new', $payload);
+        $response   = json_decode($this->client->getResponse()->getContent(), true);
+        $campaignId = $response['campaign']['id'];
+
+        // Try to delete a non-existent event
+        $this->client->request(Request::METHOD_DELETE, "api/campaigns/{$campaignId}/events/99999/delete");
+        Assert::assertSame(Response::HTTP_NOT_FOUND, $this->client->getResponse()->getStatusCode());
+    }
+
+    /**
+     * Build a simple campaign payload with 2 events for testing.
+     */
+    private function buildSimpleCampaignPayload(int $segmentId, int $emailId): array
+    {
+        return [
+            'name'   => 'Test Campaign',
+            'events' => [
+                [
+                    'id'                  => 'new_1',
+                    'name'                => 'Send email',
+                    'type'                => 'email.send',
+                    'eventType'           => 'action',
+                    'order'               => 1,
+                    'properties'          => ['email' => $emailId, 'email_type' => 'marketing'],
+                    'triggerInterval'     => 0,
+                    'triggerIntervalUnit' => 'd',
+                    'triggerMode'         => 'immediate',
+                    'parent'              => null,
+                    'decisionPath'        => null,
+                ],
+                [
+                    'id'                  => 'new_2',
+                    'name'                => 'Send followup',
+                    'type'                => 'email.send',
+                    'eventType'           => 'action',
+                    'order'               => 2,
+                    'properties'          => ['email' => $emailId, 'email_type' => 'marketing'],
+                    'triggerInterval'     => 3,
+                    'triggerIntervalUnit' => 'd',
+                    'triggerMode'         => 'interval',
+                    'parent'              => 'new_1',
+                    'decisionPath'        => null,
+                ],
+            ],
+            'lists' => [['id' => $segmentId]],
+            'forms' => [],
+            'canvasSettings' => [
+                'nodes' => [
+                    ['id' => 'lists', 'positionX' => '780', 'positionY' => '50'],
+                    ['id' => 'new_1', 'positionX' => '556', 'positionY' => '155'],
+                    ['id' => 'new_2', 'positionX' => '556', 'positionY' => '260'],
+                ],
+                'connections' => [
+                    ['sourceId' => 'lists', 'targetId' => 'new_1', 'anchors' => ['source' => 'leadsource', 'target' => 'top']],
+                    ['sourceId' => 'new_1', 'targetId' => 'new_2', 'anchors' => ['source' => 'bottom', 'target' => 'top']],
+                ],
+            ],
+        ];
+    }
+
     public function testImportCampaignMalformedJson(): void
     {
         $user = $this->em->getRepository(User::class)->findOneBy(['username' => 'admin']);
