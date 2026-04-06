@@ -269,32 +269,44 @@ final class CampaignApiController extends CommonApiController
             // PATCH with events: merge with existing events instead of replacing.
             // Events with existing IDs are updated. Events with new_* IDs are added.
             // Existing events not in the PATCH payload are preserved.
+            //
+            // Reload fresh entity from DB since the denormalizer may have emptied the events collection.
+            $freshEntity = $this->model->getEntity($entity->getId());
+            $existingEvents = $freshEntity ? $freshEntity->getEvents()->toArray() : [];
+
+            // Build the full merged events array for setEvents()
             $mergedEvents = [];
-            foreach ($entity->getEvents() as $existingEvent) {
-                $mergedEvents[$existingEvent->getId()] = $this->eventToArray($existingEvent);
+            foreach ($existingEvents as $id => $event) {
+                $mergedEvents[$id] = $this->eventToArray($event);
             }
 
+            $newEvents = [];
             foreach ($parameters['events'] as $eventData) {
                 $eventId = $eventData['id'] ?? null;
                 if ($eventId && isset($mergedEvents[$eventId])) {
-                    // Update existing event: merge provided fields over existing
+                    // Merge updated fields over existing event data
                     $mergedEvents[$eventId] = array_merge($mergedEvents[$eventId], $eventData);
-                } else {
-                    // New event (temp ID like new_1)
-                    $mergedEvents[$eventData['id'] ?? uniqid('new_')] = $eventData;
+                } elseif ($eventId && is_string($eventId) && str_starts_with($eventId, 'new')) {
+                    $mergedEvents[$eventId] = $eventData;
+                    $newEvents[] = $eventData;
                 }
             }
 
             // Use existing canvasSettings if not provided, extending for new events
-            $canvasSettings = $parameters['canvasSettings'] ?? $entity->getCanvasSettings();
+            $canvasSettings = $parameters['canvasSettings'] ?? $freshEntity->getCanvasSettings();
             if (!isset($parameters['canvasSettings'])) {
-                // Add nodes/connections for any new events
-                foreach ($mergedEvents as $id => $eventData) {
-                    if (is_string($id) && str_starts_with($id, 'new')) {
-                        $canvasSettings = $this->extendCanvasForNewEvent($canvasSettings, $id, $mergedEvents);
+                foreach ($newEvents as $newEvent) {
+                    $newId = $newEvent['id'] ?? null;
+                    if ($newId) {
+                        $canvasSettings = $this->extendCanvasForNewEvent($canvasSettings, $newId, $mergedEvents);
                     }
                 }
             }
+
+            // Replace $entity with $freshEntity (which has the correct events collection)
+            // so setEvents() can match existing event IDs and update instead of duplicate.
+            // preSaveEntity takes &$entity by reference, so this propagates to the caller.
+            $entity = $freshEntity;
 
             $this->model->setEvents($entity, array_values($mergedEvents), $canvasSettings, $deletedEvents);
         } elseif (isset($parameters['events']) && isset($parameters['canvasSettings'])) {
