@@ -222,7 +222,51 @@ class CampaignApiController extends CommonApiController
         $this->model->setLeadSources($entity, $currentSources, $deletedSources);
 
         // Build and set Event entities
-        if (isset($parameters['events']) && isset($parameters['canvasSettings'])) {
+        if ('PATCH' === $method && !isset($parameters['events'])) {
+            // PATCH without events: preserve existing events by reloading from database.
+            // Without this, the denormalizer's empty collection would cascade-delete all events.
+            $freshEntity = $this->model->getEntity($entity->getId());
+            if ($freshEntity) {
+                foreach ($freshEntity->getEvents() as $event) {
+                    if (!$entity->getEvents()->contains($event)) {
+                        $entity->addEvent($event->getId(), $event);
+                    }
+                }
+            }
+        } elseif ('PATCH' === $method && isset($parameters['events'])) {
+            // PATCH with events: merge with existing events instead of replacing.
+            // Events with existing IDs are updated. Events with new_* IDs are added.
+            // Existing events not in the PATCH payload are preserved.
+            $mergedEvents = [];
+            foreach ($entity->getEvents() as $existingEvent) {
+                $mergedEvents[$existingEvent->getId()] = $this->eventToArray($existingEvent);
+            }
+
+            foreach ($parameters['events'] as $eventData) {
+                $eventId = $eventData['id'] ?? null;
+                if ($eventId && isset($mergedEvents[$eventId])) {
+                    // Update existing event: merge provided fields over existing
+                    $mergedEvents[$eventId] = array_merge($mergedEvents[$eventId], $eventData);
+                } else {
+                    // New event (temp ID like new_1)
+                    $mergedEvents[$eventData['id'] ?? uniqid('new_')] = $eventData;
+                }
+            }
+
+            // Use existing canvasSettings if not provided, extending for new events
+            $canvasSettings = $parameters['canvasSettings'] ?? $entity->getCanvasSettings();
+            if (!isset($parameters['canvasSettings'])) {
+                // Add nodes/connections for any new events
+                foreach ($mergedEvents as $id => $eventData) {
+                    if (is_string($id) && str_starts_with($id, 'new')) {
+                        $canvasSettings = $this->extendCanvasForNewEvent($canvasSettings, $id, $mergedEvents);
+                    }
+                }
+            }
+
+            $this->model->setEvents($entity, array_values($mergedEvents), $canvasSettings, $deletedEvents);
+        } elseif (isset($parameters['events']) && isset($parameters['canvasSettings'])) {
+            // POST/PUT: original behavior — replace all events
             $this->model->setEvents($entity, $parameters['events'], $parameters['canvasSettings'], $deletedEvents);
         }
 
@@ -258,8 +302,8 @@ class CampaignApiController extends CommonApiController
         $this->model->saveEntity($entity);
 
         // Update canvas settings with new event IDs then save
-        if (isset($parameters['canvasSettings'])) {
-            $this->model->setCanvasSettings($entity, $parameters['canvasSettings']);
+        if (isset($parameters['canvasSettings']) || ('PATCH' === $method && isset($parameters['events']))) {
+            $this->model->setCanvasSettings($entity, $parameters['canvasSettings'] ?? $entity->getCanvasSettings());
         }
 
         if (Request::METHOD_PUT === $method && !empty($deletedEvents)) {
@@ -285,6 +329,150 @@ class CampaignApiController extends CommonApiController
         }
 
         return $updatedEvents;
+    }
+
+    /**
+     * Serialize an Event entity back to the array format expected by CampaignModel::setEvents().
+     */
+    private function eventToArray(Event $event): array
+    {
+        $data = [
+            'id'                   => $event->getId(),
+            'name'                 => $event->getName(),
+            'description'          => $event->getDescription(),
+            'type'                 => $event->getType(),
+            'eventType'            => $event->getEventType(),
+            'order'                => $event->getOrder(),
+            'properties'           => $event->getProperties(),
+            'triggerMode'          => $event->getTriggerMode(),
+            'triggerDate'          => $event->getTriggerDate(),
+            'triggerInterval'      => $event->getTriggerInterval(),
+            'triggerIntervalUnit'  => $event->getTriggerIntervalUnit(),
+            'triggerHour'          => $event->getTriggerHour(),
+            'triggerRestrictedStartHour'   => $event->getTriggerRestrictedStartHour(),
+            'triggerRestrictedStopHour'    => $event->getTriggerRestrictedStopHour(),
+            'triggerRestrictedDaysOfWeek'  => $event->getTriggerRestrictedDaysOfWeek(),
+            'anchor'               => $event->getDecisionPath(),
+            'channel'              => $event->getChannel(),
+            'channelId'            => $event->getChannelId(),
+        ];
+
+        if ($event->getParent()) {
+            $data['parent'] = $event->getParent()->getId();
+        }
+
+        return $data;
+    }
+
+    /**
+     * Extend canvasSettings with a node and connection for a new event.
+     */
+    private function extendCanvasForNewEvent(array $canvasSettings, string $newId, array $allEvents): array
+    {
+        if (!isset($canvasSettings['nodes'])) {
+            $canvasSettings['nodes'] = [];
+        }
+        if (!isset($canvasSettings['connections'])) {
+            $canvasSettings['connections'] = [];
+        }
+
+        // Calculate Y position based on existing nodes
+        $maxY = 50;
+        foreach ($canvasSettings['nodes'] as $node) {
+            $y = (int) ($node['positionY'] ?? 0);
+            if ($y > $maxY) {
+                $maxY = $y;
+            }
+        }
+
+        $canvasSettings['nodes'][] = [
+            'id'        => $newId,
+            'positionX' => '556',
+            'positionY' => (string) ($maxY + 105),
+        ];
+
+        // Add connection from parent if specified
+        $eventData = $allEvents[$newId] ?? [];
+        if (!empty($eventData['parent'])) {
+            $canvasSettings['connections'][] = [
+                'sourceId' => (string) $eventData['parent'],
+                'targetId' => $newId,
+                'anchors'  => ['source' => 'bottom', 'target' => 'top'],
+            ];
+        }
+
+        return $canvasSettings;
+    }
+
+    /**
+     * Delete a single event from a campaign.
+     */
+    public function deleteEventAction(int $campaignId, int $eventId): Response
+    {
+        $entity = $this->model->getEntity($campaignId);
+        if (null === $entity) {
+            return $this->notFound();
+        }
+
+        if (!$this->checkEntityAccess($entity, 'edit')) {
+            return $this->accessDenied();
+        }
+
+        $events = $entity->getEvents();
+        $targetEvent = null;
+        foreach ($events as $event) {
+            if ($event->getId() === $eventId) {
+                $targetEvent = $event;
+                break;
+            }
+        }
+
+        if (null === $targetEvent) {
+            return $this->notFound();
+        }
+
+        // Re-parent children to the deleted event's parent
+        $parent = $targetEvent->getParent();
+        foreach ($targetEvent->getChildren() as $child) {
+            $child->setParent($parent);
+            if ($parent) {
+                $parent->addChild($child);
+            }
+        }
+
+        // Remove the event
+        $this->eventModel->deleteEvents($events->toArray(), [$eventId]);
+
+        // Update canvas settings to remove the deleted event
+        $canvasSettings = $entity->getCanvasSettings();
+        if (isset($canvasSettings['nodes'])) {
+            $canvasSettings['nodes'] = array_values(array_filter(
+                $canvasSettings['nodes'],
+                fn ($node) => (string) $node['id'] !== (string) $eventId
+            ));
+        }
+        if (isset($canvasSettings['connections'])) {
+            $parentId = $parent ? (string) $parent->getId() : null;
+            $newConnections = [];
+            foreach ($canvasSettings['connections'] as $conn) {
+                if ((string) $conn['targetId'] === (string) $eventId) {
+                    // Skip connections TO the deleted event
+                    continue;
+                }
+                if ((string) $conn['sourceId'] === (string) $eventId && $parentId) {
+                    // Redirect connections FROM the deleted event to its parent
+                    $conn['sourceId'] = $parentId;
+                }
+                $newConnections[] = $conn;
+            }
+            $canvasSettings['connections'] = $newConnections;
+        }
+        $entity->setCanvasSettings($canvasSettings);
+        $this->model->saveEntity($entity);
+
+        $view = $this->view(['success' => 1], Response::HTTP_OK);
+
+        return $this->handleView($view);
     }
 
     /**
