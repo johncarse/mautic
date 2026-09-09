@@ -298,6 +298,8 @@ final class BuilderSubscriberTest extends TestCase
             '<a href="/email/unsubscribe/hash/lukas.sykora@acquia.com/'.$emailHash.'">Unsubscribe</a> '.$company->getName().' '.$lead->getLastname(),
             $event->getTokens()['{unsubscribe_text}']
         );
+    }
+
     public function testHoneypotLinkInjected(): void
     {
         $this->coreParametersHelper->method('get')->willReturnCallback(function ($key) {
