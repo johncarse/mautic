@@ -13,6 +13,7 @@ use Mautic\PageBundle\Entity\Hit;
 use Mautic\PageBundle\Entity\Page;
 use Mautic\PageBundle\Entity\Redirect;
 use PHPUnit\Framework\Assert;
+use Symfony\Component\BrowserKit\Cookie as BrowserKitCookie;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -118,6 +119,12 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
         $ct = $this->getEncodedClickThroughValue($stat->getTrackingHash(), $lead->getId());
 
         $this->logoutUser();
+
+        // The cross-domain scenario: the browser already carries the Mautic
+        // device cookie, so the tracking flow reuses the seeded device instead
+        // of creating a fresh one, and its id is what must propagate. Without
+        // the cookie a new device is (correctly) created and appended instead.
+        $this->client->getCookieJar()->set(new BrowserKitCookie('mautic_device_id', $trackingId));
 
         $this->client->followRedirects(false);
         $this->client->request(Request::METHOD_GET, sprintf('/r/%s?ct=%s', $redirect->getRedirectId(), $ct));
