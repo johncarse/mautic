@@ -12,6 +12,7 @@ use Mautic\LeadBundle\Entity\LeadDevice;
 use Mautic\PageBundle\Entity\Hit;
 use Mautic\PageBundle\Entity\Page;
 use Mautic\PageBundle\Entity\Redirect;
+use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -124,7 +125,10 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
         $response = $this->client->getResponse();
         $this->assertInstanceOf(RedirectResponse::class, $response);
         self::assertResponseStatusCodeSame(Response::HTTP_FOUND);
-        $this->assertSame($url, $response->getTargetUrl(), 'The dots in the query part must be preserved.');
+        // The device-id patch appends mautic_device_id to redirect targets, so
+        // the original URL (dots and all) must survive as a prefix.
+        $this->assertStringStartsWith($url, $response->getTargetUrl(), 'The dots in the query part must be preserved.');
+        $this->assertMatchesRegularExpression('/[?&]mautic_device_id=[a-z0-9]+$/', $response->getTargetUrl());
 
         $hit = $this->em->getRepository(Hit::class)->findOneBy(['url' => $url]);
         $this->assertInstanceOf(Hit::class, $hit);
