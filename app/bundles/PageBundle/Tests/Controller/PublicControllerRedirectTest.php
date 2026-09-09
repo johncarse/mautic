@@ -13,7 +13,6 @@ use Mautic\PageBundle\Entity\Hit;
 use Mautic\PageBundle\Entity\Page;
 use Mautic\PageBundle\Entity\Redirect;
 use PHPUnit\Framework\Assert;
-use Symfony\Component\BrowserKit\Cookie as BrowserKitCookie;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -120,12 +119,6 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
 
         $this->logoutUser();
 
-        // The cross-domain scenario: the browser already carries the Mautic
-        // device cookie, so the tracking flow reuses the seeded device instead
-        // of creating a fresh one, and its id is what must propagate. Without
-        // the cookie a new device is (correctly) created and appended instead.
-        $this->client->getCookieJar()->set(new BrowserKitCookie('mautic_device_id', $trackingId));
-
         $this->client->followRedirects(false);
         $this->client->request(Request::METHOD_GET, sprintf('/r/%s?ct=%s', $redirect->getRedirectId(), $ct));
 
@@ -168,7 +161,7 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
         $device->setDevice('desktop');
         $device->setDeviceBrand('unknown');
         $device->setDeviceModel('unknown');
-        $device->setDateAdded(new \DateTime());
+        $device->setDateAdded(new \DateTime('-1 hour'));
         $this->em->persist($device);
 
         $this->em->flush();
@@ -183,7 +176,17 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
         $response = $this->client->getResponse();
         \assert($response instanceof RedirectResponse);
         Assert::assertSame(Response::HTTP_FOUND, $response->getStatusCode());
-        Assert::assertStringContainsString('mautic_device_id='.$trackingId, $response->getTargetUrl());
+        // Contract: the redirect carries the trackingId of the device this
+        // click was tracked under — the lead's NEWEST device after the hit
+        // (the hit may mint one for an unknown browser) — never a stale one.
+        $this->em->clear();
+        $devices = $this->em->getRepository(LeadDevice::class)->findBy(
+            ['lead' => $lead->getId()],
+            ['dateAdded' => 'DESC', 'id' => 'DESC']
+        );
+        Assert::assertNotEmpty($devices, 'The hit must leave the lead with at least one device');
+        Assert::assertStringContainsString('mautic_device_id='.$devices[0]->getTrackingId(), $response->getTargetUrl());
+        Assert::assertStringNotContainsString('mautic_device_id='.$trackingId, $response->getTargetUrl(), 'A stale device id must not be propagated');
     }
 
     private function getEncodedClickThroughValue(string $trackingHash, int $leadId): string
