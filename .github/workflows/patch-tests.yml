@@ -1,0 +1,103 @@
+# Tests for the FlowBridge patch stack (the *-custom branches).
+#
+# Exists because of the 2026-09-09 incident: a rebase silently dropped one hunk
+# of the PRedisConnectionHelper patch, a unit test covering exactly that hunk
+# existed on the branch — and nothing ran it. The broken image reached
+# production and 500ed every tracking endpoint.
+#
+# Runs ONLY the tests belonging to patched code, so it stays fast; the full
+# upstream suite is not our concern on this fork.
+name: Patch tests
+
+on:
+  push:
+    branches: [ '**-custom' ]
+  pull_request:
+    branches: [ '**-custom' ]
+
+jobs:
+  unit:
+    name: Unit (patched bundles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, mysql, pdo_mysql
+          ini-values: zend.assertions=1
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run patched-bundle unit tests
+        run: |
+          set -e
+          for t in \
+            app/bundles/CoreBundle/Tests/Unit/Helper/PRedisConnectionHelperTest.php \
+            app/bundles/EmailBundle/Tests/EventListener/BuilderSubscriberTest.php \
+            app/bundles/EmailBundle/Tests/MonitoredEmail/Search/ContactFinderTest.php
+          do
+            echo "::group::$t"
+            php -d zend.assertions=1 bin/phpunit -d memory_limit=1G \
+              --bootstrap vendor/autoload.php \
+              --configuration app/phpunit.xml.dist "$t"
+            echo "::endgroup::"
+          done
+
+  functional:
+    name: Functional (campaign API + redirect patches)
+    runs-on: ubuntu-latest
+    services:
+      database:
+        image: mariadb:10.11
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: yes
+          MYSQL_DATABASE: mautictest
+        ports:
+          - 3306
+        options: >-
+          --shm-size=2gb
+          --tmpfs=/var/lib/mysql
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo_sqlite, mysql, pdo_mysql
+          ini-values: zend.assertions=1
+
+      - name: MySQL client config
+        run: cp .github/ci-files/.my.cnf ~/.my.cnf
+
+      - name: Set test environment
+        run: |
+          echo "SYMFONY_ENV=test" >> $GITHUB_ENV
+          echo "MAUTIC_ENV=test" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Run patched functional tests
+        run: |
+          set -e
+          rm -rf var/cache
+          export DB_PORT="${{ job.services.database.ports[3306] }}"
+          for t in \
+            app/bundles/CampaignBundle/Tests/Controller/Api/CampaignApiControllerFunctionalTest.php \
+            app/bundles/PageBundle/Tests/Controller/PublicControllerRedirectTest.php
+          do
+            echo "::group::$t"
+            php -d zend.assertions=1 bin/phpunit -d memory_limit=2G \
+              --bootstrap vendor/autoload.php \
+              --configuration app/phpunit.xml.dist "$t"
+            echo "::endgroup::"
+          done
