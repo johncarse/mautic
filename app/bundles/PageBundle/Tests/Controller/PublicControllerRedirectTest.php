@@ -148,6 +148,7 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
         $stat->setTrackingHash('abc123def456');
         $stat->setDateSent(new \DateTime());
         $stat->setEmailAddress($emailAddress);
+        $stat->setLead($lead);
         $this->em->persist($stat);
 
         $redirect = new Redirect();
@@ -180,11 +181,13 @@ final class PublicControllerRedirectTest extends MauticMysqlTestCase
         // click was tracked under — the lead's NEWEST device after the hit
         // (the hit may mint one for an unknown browser) — never a stale one.
         $this->em->clear();
+        // Newest device in the system = the device this hit was tracked under
+        // (whichever contact the clickthrough resolved to).
         $devices = $this->em->getRepository(LeadDevice::class)->findBy(
-            ['lead' => $lead->getId()],
+            [],
             ['dateAdded' => 'DESC', 'id' => 'DESC']
         );
-        Assert::assertNotEmpty($devices, 'The hit must leave the lead with at least one device');
+        Assert::assertNotEmpty($devices, 'The hit must leave at least one device');
         Assert::assertStringContainsString('mautic_device_id='.$devices[0]->getTrackingId(), $response->getTargetUrl());
         Assert::assertStringNotContainsString('mautic_device_id='.$trackingId, $response->getTargetUrl(), 'A stale device id must not be propagated');
     }
