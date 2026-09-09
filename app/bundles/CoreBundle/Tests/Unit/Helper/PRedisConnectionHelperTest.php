@@ -7,6 +7,7 @@ namespace Mautic\CoreBundle\Tests\Unit\Helper;
 use Mautic\CoreBundle\Helper\PRedisConnectionHelper;
 use Mautic\CoreBundle\Predis\Command\Unlink;
 use Mautic\CoreBundle\Predis\Replication\MasterOnlyStrategy;
+use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\TestCase;
 use Predis\Cluster\ClusterStrategy;
 use Predis\Command\Processor\KeyPrefixProcessor;
